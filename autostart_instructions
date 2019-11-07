@@ -1,0 +1,8 @@
+In /home/allskypi/.config/lxsessions/LXDE-pi/autostart add the following ( you may need to copy these files from /etc/xdg;        
+
+
+@lxpanel --profile LXDE-pi
+@pcmanfm --desktop --profile LXDE-pi
+@xscreensaver -no-splash
+@point-rpi
+#@lxterminal-e python3 /home/allskypi/CamPy4Pi/DualCamPy.py
