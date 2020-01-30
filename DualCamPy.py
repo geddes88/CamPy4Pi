@@ -148,28 +148,38 @@ class zwo_controller(object):
         self.controls=self.camera.get_controls()
     def close_camera(self):
         self.camera.close()
+        
+    def take_dark_image(self):
+        image=self.camera.capture()
+        return image,self.camera.get_control_values()
+    
                 
     def take_image(self):
+        #self.camera.set_control_value(asi.ASI_BANDWIDTHOVERLOAD,100)
         self.camera.start_video_capture()
         image=self.camera.capture_video_frame() 
         image=self.camera.capture_video_frame() 
         image=self.camera.capture_video_frame() 
         self.camera.stop_video_capture()
         return image,self.camera.get_control_values()
-    def auto_exp(self,auto_wb=False):
+    def auto_exp(self,starting_exposure=10,auto_wb=False):
         self.check_open()
      
         self.camera.auto_exposure()
+        self.camera.set_control_value(asi.ASI_EXPOSURE,starting_exposure,auto=True)
+        self.camera.set_control_value(asi.ASI_GAIN,0,auto=True)
+
         if auto_wb:
             self.camera.auto_wb()
         
-        time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=12)
+        time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=timezone)
         image,output=self.take_image()
         directory_out,filename_out=filename(sky_directory,time_in,'auto')
         file_out=file_checker(directory_out+filename_out,'.jpg')
         if self.type=='raw':
             image = (image/256).astype('uint8')
             image=cv2.cvtColor(image, cv2.COLOR_BAYER_RG2RGB)
+
         cv2.imwrite(file_out,image)
         save_control_values(directory_out+filename_out,[output])
         self.camera.set_control_value(asi.ASI_EXPOSURE,self.controls['Exposure']['DefaultValue'],auto=False)
@@ -177,18 +187,25 @@ class zwo_controller(object):
         self.camera.set_control_value(asi.ASI_WB_B,self.controls['WB_B']['DefaultValue'],auto=False)
         self.camera.set_control_value(asi.ASI_WB_R,self.controls['WB_R']['DefaultValue'],auto=False)
         
-    def manual_exp(self,exposure,auto_wb=False):
+    def manual_exp(self,exposure,auto_wb=False,gain=0,type_exp='Day'):
         self.check_open()
 
-        self.camera.set_control_value(asi.ASI_GAIN,0,auto=False)
+        self.camera.set_control_value(asi.ASI_GAIN,gain,auto=False)
         self.camera.set_control_value(asi.ASI_WB_B,90,auto=auto_wb)
         self.camera.set_control_value(asi.ASI_WB_R,50,auto=auto_wb)
         self.camera.set_control_value(asi.ASI_EXPOSURE,exposure,auto=False)
-        image,output=self.take_image()
+        if type_exp=='Day':
+            self.camera.set_control_value(asi.ASI_WB_B,90,auto=auto_wb)
+            self.camera.set_control_value(asi.ASI_WB_R,50,auto=auto_wb)
+            image,output=self.take_image()
+        else:
+            self.camera.set_control_value(asi.ASI_WB_B,90,auto=auto_wb)
+            self.camera.set_control_value(asi.ASI_WB_R,90,auto=auto_wb)
+            image,output=self.take_dark_image()
         return image,output
     
     def single_manual(self,exposure,auto_wb=False):
-        time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=12)
+        time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=timezone)
 
         image,output=self.manual_exp(exposure,auto_wb=auto_wb)
         directory_out,filename_out=filename(sky_directory,time_in,'man')
@@ -213,14 +230,14 @@ class zwo_controller(object):
             self.type='raw'
 
            
-    def multi_expo(self,exposure_list=[32,64,250,500,1000,1250,1500],suffix='day',auto_wb=False):
+    def multi_expo(self,exposure_list=[32,64,250,500,1000,1250,1500],gain=0,suffix='Day',auto_wb=False):
         self.check_open()
         image_list=[]
         output_all=[]
-        time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=12)
+        time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=timezone)
         for exposure in exposure_list:
             print('taking exposure '+str(exposure))
-            image,output=self.manual_exp(exposure,auto_wb=False)
+            image,output=self.manual_exp(exposure,auto_wb=False,gain=gain,type_exp=suffix)
             image_list.append(image)
             output_all.append(output)
         for i,exposure in enumerate(exposure_list):
@@ -231,7 +248,7 @@ class zwo_controller(object):
                 image = (image/256).astype('uint8')
                 image=cv2.cvtColor(image, cv2.COLOR_BAYER_RG2RGB)
     
-            directory_out=filename2(sky_directory,time_in,'hdr')
+            directory_out=filename2(sky_directory,time_in,suffix)
             filename_out='exposure_'+str(exposure)
             file_out=file_checker(directory_out+filename_out,'.jpg')
             cv2.imwrite(file_out,image)
@@ -284,6 +301,7 @@ if __name__=='__main__':
     heater_pin=17
     longitude=169.684
     latitude=-45.038
+    timezone=12
     pressure=0
     temperature=0
     sky_time_hdr=5
@@ -292,36 +310,40 @@ if __name__=='__main__':
     met_time=1
     sza_threshold=100
     night_exposures=[1000000,5000000,10000000]
-    day_exposures=[32,64,250,500,1000,1250,1500]
+    day_exposures=[16,32,64,250,500,1000,1250,1500]
     
     
     allsky_camera=zwo_controller()
     front_camera=front_camera_controller()
-
+    allsky_camera.set_type(color=True)
     GPIO.setup(heater_pin,GPIO.OUT)
     GPIO.setup(led_pin,GPIO.OUT)
     GPIO.output(led_pin,0)
     heater_status=0
     led_status=0
-    time_in=datetime.datetime.now()
+    time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=timezone)
     next_time=time_in+datetime.timedelta(minutes=1)
     next_time=next_time.replace(second=0,microsecond=0)
     print ('Setup complete')
     while True:
-        time_in=datetime.datetime.now()
+        time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=timezone)
         if (next_time-time_in).total_seconds()<0:
-            print('Actions',next_time,time_in)
+            print('Actions at ',next_time,time_in)
+            sza,saz=sunzen_ephem(next_time,latitude,longitude,pressure,temperature)
             minute_in=next_time.minute
              
 
             if minute_in % sky_time_auto ==0:
-                print('allsky auto')
-                allsky_camera.auto_exp()
-
-            if minute_in % front_time ==0:
-                print('front auto')
-
-                front_camera.auto_exp()
+                print('allsky auto')                
+                if sza<sza_threshold:
+                    allsky_camera.auto_exp(starting_exposure=500,auto_wb=False)
+                else:
+                    allsky_camera.auto_exp(starting_exposure=1000000,auto_wb=False)
+#
+#            if minute_in % front_time ==0:
+#                print('front auto')
+#
+#                front_camera.auto_exp()
                         
         
             if ep.weather.temperature() <=20 and heater_status==0:
@@ -339,11 +361,12 @@ if __name__=='__main__':
                 
             if minute_in % sky_time_hdr ==0:
                 print('multi exposure')
-                sza,saz=sunzen_ephem(next_time,latitude,longitude,pressure,temperature)
+
                 if sza<sza_threshold:
                     allsky_camera.multi_expo(exposure_list=day_exposures,suffix='Day')
                 else:
-                    allsky_camera.multi_expo(exposure_list=night_exposures,suffix='Night')
+                    
+                    allsky_camera.multi_expo(exposure_list=night_exposures,suffix='Night',gain=100)
 
             next_time=next_time+datetime.timedelta(minutes=1)
             time.sleep(2)
