@@ -13,16 +13,14 @@ import datetime
 import subprocess
 import RPi.GPIO as GPIO
 import envirophat as ep
-import ephem
 import time
-
-__author__ = 'Steve Marple'
-__version__ = '0.0.22'
-__license__ = 'MIT'
-
+from process_images import *
+import threading
+import multiprocessing as mpro
 
 
-env_filename = '/home/allskypi/Downloads/lib/armv7/libASICamera2.so'
+
+env_filename = '/home/pi/asi_drivers/lib/armv7/libASICamera2.so'
 
 parser = argparse.ArgumentParser(description='Process and save images from a camera')
 parser.add_argument('filename',
@@ -39,76 +37,7 @@ else:
     print('The filename of the SDK library is required (or set ZWO_ASI_LIB environment variable with the filename)')
     sys.exit(1)
 
-def invert_image(image):
-    image_out=image.copy()
-    image_out[:,:,0]=image[:,:,2]
-    image_out[:,:,2]=image[:,:,0]
-    return (image_out)
 
-def filename(data_directory,time_in,suffix):
-    todayspath=datetime.datetime.strftime(time_in,'%Y/%m/%Y%m%d')
-    directory_out=data_directory+todayspath+'/'
-    if not os.path.exists(os.path.dirname(directory_out)):
-        os.makedirs(os.path.dirname(directory_out))
-    n=''
-    filename_out=datetime.datetime.strftime(time_in,'%Y%m%d_%H%M_'+suffix)
-
-    return directory_out,filename_out
-
-def filename2(data_directory,time_in,suffix):
-    todayspath=datetime.datetime.strftime(time_in,'%Y/%m/%Y%m%d/%Y%m%d_%H%M')
-    directory_out=data_directory+todayspath+'_'+suffix+'/'
-    if not os.path.exists(os.path.dirname(directory_out)):
-        os.makedirs(os.path.dirname(directory_out))
-    return directory_out
-
-def file_checker(filename,extention):
-    n=1
-    if os.path.exists(filename+extention):
-        filename_out=filename+'_'+str(n)+extention
-        
-        while n<100:
-            if os.path.exists(filename_out):
-                n+=1
-                filename_out=filename+'_'+str(n)+extention
-            else:
-                break
-    else:
-        filename_out=filename+extention
-    return filename_out
-        
-def save_control_values(filename, all_settings):
-    filename=file_checker(filename,'.txt')
-    with open(filename, 'w') as f:
-        for settings in all_settings:
-            for k in sorted(settings.keys()):
-                f.write('%s: %s\n' % (k, str(settings[k])))
-    print('Camera settings saved to %s' % filename)
-    
-def decdeg2dms(dd):
-    is_positive = dd >= 0
-    dd = abs(dd)
-    minutes,seconds = divmod(dd*3600,60)
-    degrees,minutes = divmod(minutes,60)
-    degrees = degrees if is_positive else -degrees
-    return str(int(degrees))+":"+str(int(minutes))+":"+str(seconds)
-
-def sunzen_ephem(time,Lat,Lon,psurf,temp):
-    time=time-datetime.timedelta(hours=12)
-    observer = ephem.Observer()
-    observer.lon = decdeg2dms(Lon)
-    observer.lat = decdeg2dms(Lat)
-    observer.date = time
- 
-    observer.pressure=psurf
-    observer.temp=temp
-    sun = ephem.Sun(observer)
-   # sun.compute(observer)
-    alt_atr = float(sun.alt)
-    solar_altitude=180.0*alt_atr/np.pi
-    solar_zenith=90.0-solar_altitude
-    solar_azimuth=180*float(sun.az)/np.pi
-    return solar_zenith, solar_azimuth
 
 class zwo_controller(object):
     def __init__(self):
@@ -156,10 +85,14 @@ class zwo_controller(object):
                 
     def take_image(self):
         #self.camera.set_control_value(asi.ASI_BANDWIDTHOVERLOAD,100)
+        
         self.camera.start_video_capture()
+        
         image=self.camera.capture_video_frame() 
         image=self.camera.capture_video_frame() 
-        image=self.camera.capture_video_frame() 
+        image=self.camera.capture_video_frame()
+       # image=self.camera.capture()
+
         self.camera.stop_video_capture()
         return image,self.camera.get_control_values()
     def auto_exp(self,starting_exposure=10,auto_wb=False):
@@ -186,6 +119,10 @@ class zwo_controller(object):
         self.camera.set_control_value(asi.ASI_GAIN,self.controls['Gain']['DefaultValue'],auto=False)
         self.camera.set_control_value(asi.ASI_WB_B,self.controls['WB_B']['DefaultValue'],auto=False)
         self.camera.set_control_value(asi.ASI_WB_R,self.controls['WB_R']['DefaultValue'],auto=False)
+        to=mpro.Process(target=compute_cloud,args=(image,time_in,configuration_auto))
+        to.start()
+        exposure=output['Exposure']
+        return exposure
         
     def manual_exp(self,exposure,auto_wb=False,gain=0,type_exp='Day'):
         self.check_open()
@@ -199,8 +136,8 @@ class zwo_controller(object):
             self.camera.set_control_value(asi.ASI_WB_R,50,auto=auto_wb)
             image,output=self.take_image()
         else:
-            self.camera.set_control_value(asi.ASI_WB_B,90,auto=auto_wb)
-            self.camera.set_control_value(asi.ASI_WB_R,90,auto=auto_wb)
+            self.camera.set_control_value(asi.ASI_WB_B,80,auto=auto_wb)
+            self.camera.set_control_value(asi.ASI_WB_R,53,auto=auto_wb)
             image,output=self.take_dark_image()
         return image,output
     
@@ -216,6 +153,10 @@ class zwo_controller(object):
         cv2.imwrite(file_out,image)
         
         save_control_values(directory_out+filename_out,[output])
+        to=mpro.Process(target=compute_cloud,args=(image,time_in,configuration_auto))
+        to.start()
+
+        del image
 
     def set_type(self,color=False):
 
@@ -229,7 +170,15 @@ class zwo_controller(object):
             self.camera.set_image_type(asi.ASI_IMG_RAW16)
             self.type='raw'
 
-           
+    def process_hdr(self,image_list,time_in):
+        hdr_image=merge_image(image_list)
+        directory_out,filename_out=filename(sky_directory,time_in,'hdr')
+        file_out=file_checker(directory_out+filename_out,'.jpg')
+        cv2.imwrite(file_out,hdr_image)
+        print('finished hdr')
+        del image_list
+        compute_cloud(hdr_image,time_in,configuration_hdr)
+        
     def multi_expo(self,exposure_list=[32,64,250,500,1000,1250,1500],gain=0,suffix='Day',auto_wb=False):
         self.check_open()
         image_list=[]
@@ -253,6 +202,17 @@ class zwo_controller(object):
             file_out=file_checker(directory_out+filename_out,'.jpg')
             cv2.imwrite(file_out,image)
             save_control_values(directory_out+filename_out,[output])
+            image_list[i]=image
+        if suffix=='Day':
+            #hd=threading.Thread(target=self.process_hdr,args=(image_list,time_in))
+            #hd.start()
+            hd=mpro.Process(target=self.process_hdr,args=(image_list,time_in))
+            hd.start()
+            
+        else:
+            for image in image_list:
+                process_dark(image,time_in,configuration_dark)
+        del image_list
 
 
     def check_open(self):
@@ -294,9 +254,9 @@ def log_met_data(time_in,heater_status):
     l.write(lineout+"\n")
     l.close()
 if __name__=='__main__':   
-    sky_directory='/home/allskypi/allsky_camera/'
-    front_directory='/home/allskypi/front_facing_camera/'
-    log_directory='/home/allskypi/logs/'
+    sky_directory='/home/pi/allsky_camera/'
+    front_directory='/home/pi/front_facing_camera/'
+    log_directory='/home/pi/logs/'
     led_pin=22
     heater_pin=17
     longitude=169.684
@@ -309,7 +269,7 @@ if __name__=='__main__':
     front_time=1
     met_time=1
     sza_threshold=100
-    night_exposures=[1000000,5000000,10000000]
+    night_exposures=[10000000,60000000,90000000,120000000]
     day_exposures=[16,32,64,250,500,1000,1250,1500]
     
     
@@ -325,20 +285,21 @@ if __name__=='__main__':
     next_time=time_in+datetime.timedelta(minutes=1)
     next_time=next_time.replace(second=0,microsecond=0)
     print ('Setup complete')
+    exposure_out=500
     while True:
         time_in=datetime.datetime.utcnow()+datetime.timedelta(hours=timezone)
         if (next_time-time_in).total_seconds()<0:
             print('Actions at ',next_time,time_in)
-            sza,saz=sunzen_ephem(next_time,latitude,longitude,pressure,temperature)
+            sza,saz=sunzen_ephem(next_time-datetime.timedelta(hours=timezone),latitude,longitude,pressure,temperature)
             minute_in=next_time.minute
              
 
             if minute_in % sky_time_auto ==0:
                 print('allsky auto')                
                 if sza<sza_threshold:
-                    allsky_camera.auto_exp(starting_exposure=500,auto_wb=False)
-                else:
-                    allsky_camera.auto_exp(starting_exposure=1000000,auto_wb=False)
+                    exposure_out=allsky_camera.auto_exp(starting_exposure=exposure_out,auto_wb=False)
+#                 else:
+#                     allsky_camera.auto_exp(starting_exposure=1000000,auto_wb=False)
 #
 #            if minute_in % front_time ==0:
 #                print('front auto')
@@ -346,11 +307,11 @@ if __name__=='__main__':
 #                front_camera.auto_exp()
                         
         
-            if ep.weather.temperature() <=20 and heater_status==0:
+            if ep.weather.temperature() <=50 and heater_status==0:
                 GPIO.output(17,1)
                 print('heater on')
                 heater_status=1
-            if ep.weather.temperature()>20 and heater_status==1:
+            if ep.weather.temperature()>50 and heater_status==1:
                 GPIO.output(17,0)
                 heater_status=0
                 print('heater off')
@@ -361,12 +322,13 @@ if __name__=='__main__':
                 
             if minute_in % sky_time_hdr ==0:
                 print('multi exposure')
-
-                if sza<sza_threshold:
-                    allsky_camera.multi_expo(exposure_list=day_exposures,suffix='Day')
-                else:
-                    
-                    allsky_camera.multi_expo(exposure_list=night_exposures,suffix='Night',gain=100)
+                try:
+                    if sza<sza_threshold:
+                        allsky_camera.multi_expo(exposure_list=day_exposures,suffix='Day')
+                    else: 
+                        allsky_camera.multi_expo(exposure_list=night_exposures,suffix='Night',gain=255)
+                except:
+                    continue
 
             next_time=next_time+datetime.timedelta(minutes=1)
             time.sleep(2)

@@ -63,8 +63,10 @@ def weka_dir(dir_in,on_weka=False):
         dir_out=dir_in
     return dir_out    
 
+
+
 def merge_image(images):
-    images=[cv2.imread(image) for image in images]
+    #images=[cv2.imread(image) for image in images]
     alignmtb=cv2.createAlignMTB()
     alignmtb.process(images,images)
     mm=cv2.createMergeMertens()
@@ -139,19 +141,20 @@ def date_str_to_date(x,y,z):
     return out
     
 def adjust_gamma(image, gamma=1.0):
-	# build a lookup table mapping the pixel values [0, 255] to
-	# their adjusted gamma values
-	invGamma = 1.0 / gamma
-	table = np.array([((i / 255.0) ** invGamma) * 255
-		for i in np.arange(0, 256)]).astype("uint8")
+    # build a lookup table mapping the pixel values [0, 255] to
+    # their adjusted gamma values
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255
+        for i in np.arange(0, 256)]).astype("uint8")
  
-	# apply gamma correction using the lookup table
-	return cv2.LUT(image, table) 
+    # apply gamma correction using the lookup table
+    return cv2.LUT(image, table) 
 def invert_image(image):
     image_out=image.copy()
     image_out[:,:,0]=image[:,:,2]
     image_out[:,:,2]=image[:,:,0]
     return (image_out)
+
 def display_image(image,gamma=2.2,cb=0):
     image=preprocess_image(image,gamma=gamma,cb=cb)
     
@@ -166,17 +169,17 @@ def display_image(image,gamma=2.2,cb=0):
     plt.figure()
     plt.imshow(sky_indy,vmin=-0.5,vmax=0.5)
     
-def prepare_mask(image,intensity,horizon_limit,window=5,sun_mask_high=20,sun_mask_low=10,sun_mask_horizon=40,intensity_limit=500):
+def prepare_mask(image,intensity,sky_indy,spa,psza,configuration):
     
     nanmask=np.ones(image[:,:,0].shape)
     nanmask[np.isnan(sky_indy)]=0
 
-
-    if min_spa>window:
-        window+=min_spa
-    if sza>horizon_limit:
-        window+=sza-horizon_limit
-    sat_count=len([(np.where((intensity>intensity_limit) &  (spa<np.deg2rad(window))))][0][0])
+    window=configuration['window']
+    if configuration['min_spa']>configuration['window']:
+        window+=configuration['min_spa']
+    if configuration['sza']>configuration['horizon_limit']:
+        window+=configuration['sza']-configuration['horizon_limit']
+    sat_count=len([(np.where((intensity>configuration['intensity_limit']) &  (spa<np.deg2rad(window))))][0][0])
 
     total_count=len([(np.where((spa<np.deg2rad(window))))][0][0])
     
@@ -194,20 +197,19 @@ def prepare_mask(image,intensity,horizon_limit,window=5,sun_mask_high=20,sun_mas
 
         
     if sat_stat>0.1:
-        solar_mask=get_sun_mask(spa,sun_mask_high)
+        solar_mask=get_sun_mask(spa,configuration['sun_mask_high'])
     elif 0<sat_stat<0.1:
-        solar_mask=get_sun_mask(spa,sun_mask_low)
+        solar_mask=get_sun_mask(spa,configuration['sun_mask_low'])
     else:
-        solar_mask=np.ones(np.array(r).shape)
+        solar_mask=np.ones(nanmask.shape)
                    
-    if sza>horizon_limit and sat_stat>0.0:
+    if configuration['sza']>configuration['horizon_limit'] and sat_stat>0.0:
         sat_stat=1.0
-        solar_mask=get_sun_mask(spa,sun_mask_horizon)
-    horizon_mask=np.ones(np.array(r).shape)
-    horizon_mask[np.array(psza)>np.deg2rad(horizon_limit)]=0
-    haze_mask=np.ones(horizon_mask.shape)
-    mask=np.ones(r.shape)
-    mask[np.any((horizon_mask==0,solar_mask==0,haze_mask==0,nanmask==0),axis=0)]=0
+        solar_mask=get_sun_mask(spa,configuration['sun_mask_horizon'])
+    horizon_mask=np.ones(nanmask.shape)
+    horizon_mask[np.array(psza)>np.deg2rad(configuration['horizon_limit'])]=0
+    mask=np.ones(horizon_mask.shape)
+    mask[np.any((horizon_mask==0,solar_mask==0,nanmask==0),axis=0)]=0
     
     return mask,sat_stat
 
@@ -217,7 +219,7 @@ def elifan(rbr,mask,bin_vals,sat_stat):
     rbr_filtered=rbr[np.where(mask==1)]
     rbr_filtered=rbr_filtered[~np.isnan(rbr_filtered)]
     rbr_filtered=rbr_filtered[np.isfinite(rbr_filtered)]
-    cloud_map_elifan=np.zeros(r.shape)
+    cloud_map_elifan=np.zeros(rbr.shape)
     cloud_map_elifan[mask==0]=0
     if len(rbr_filtered)!=0:
         counts,bins=np.histogram(rbr_filtered,bins=bin_vals)
@@ -314,377 +316,188 @@ def get_sun_mask(spa,angle):
     sun_mask=np.ones(spa.shape)
     sun_mask[spa<np.deg2rad(angle)]=0
     return sun_mask
-    
-on_weka=True
-   
-pi_number_in=3
-pi_number="%02d" % pi_number_in
-lat=-45.0536
-lon=169.6735
-#sys.stdout= open("/home/uvuser/pi03_python_log3.dat","a")
-#sys.stderr=sys.stdout
-start_date=datetime.datetime(2020,1,1)
-end_date=datetime.datetime(2020,7,1)
-image_type='Day'
-run_date=start_date
-delete=False
-x_centre=1470
-y_centre=1165
-pazi=calculate_azi_zwo2(x0=x_centre,y0=y_centre,heading=180-21)
-psza=calculate_pza_zwo(x0=x_centre,y0=y_centre,proj_grad=0.057,proj_offset=0)
-while run_date<=end_date:
-    """ Lets do this nicely"""
-    
-    directory_to_search=weka_dir(datetime.datetime.strftime(run_date,'V:/uv/allsky/pi03/%Y/%m/%Y%m%d/'))
-    if image_type=='auto':
-        image_list=glob.glob(directory_to_search+'*'+image_type+'.jpg')
-    else:
-        image_list=glob.glob(directory_to_search+'*'+image_type)
-    
-    for item in image_list:
-        if image_type=='auto':
-            image=cv2.imread(item)
-            bin_values=[-np.inf,0.35,0.4,0.6,0.7,0.8,np.inf]
-        if image_type=='Day':
-            if os.path.exists(item+'.jpg'):
-                image=cv2.imread(item+'.jpg')
-            else:
-                images=glob.glob(item+'/*.jpg')
-                image=merge_image(images)
-                if delete==True:
-                    shutil.rmtree(item)
-                cv2.imwrite(item+'.jpg',image)
-            bin_values=[-np.inf, 0.4, 0.45, 0.6, 0.65, 0.7,np.inf]
-        if image_type=='Night':
-            print(item)
-            images=glob.glob(item+'/*.jpg')
-            for image_in in images:
-                image=cv2.imread(image_in)
-                image=simplest_cb(image,1)
-                name_out=image_in.split('.')[0]
-                cv2.imwrite(name_out+'_corrected.jpg',image)
-        if image_type!='Night':
-            if on_weka==False:
-                time_info=item.split('\\')[1].split('_')
-            else:
-                time_info=item.split('/')[-1].split('_')
 
-            meas_date=datetime.datetime.strptime(time_info[0]+time_info[1],'%Y%m%d%H%M')
-            
-            print(meas_date)
-            sza,azi=sunzen_ephem(meas_date-datetime.timedelta(hours=12),-45.038,169.684,1000,10)
-            if sza<=90:
-                # image_hsv=cv2.cvtColor(image,cv2.COLOR_BGR2HSV)
-                # h,s,v=cv2.split(image)
-                # v=cv2.equalizeHist(v)
-                # image_hsv_corrected=cv2.merge([h,s,v])
-                # image=cv2.cvtColor(image_hsv_corrected,cv2.COLOR_HSV2BGR)
-                b,g,r=cv2.split(image)
-               # h,s,v=cv2.split(image_hsv)
+def process_dark(image,meas_date,configuration):
+    directory_out,filename_out=filename(configuration['dark_directory'],meas_date,'corrected')
+    file_out=file_checker(directory_out+filename_out,'.jpg')
+    if configuration['dark_image']!=None:
+        dark_image=cv2.imread(configuration['dark_image'])
+        image=image-dark_image
+    #image=simplest_cb(image,configuration['dark_colour_balance'])
+    cv2.imwrite(file_out,image)
 
-                r=np.array(r,dtype=np.float)
-                g=np.array(g,dtype=np.float)
-                b=np.array(b,dtype=np.float)
-                sky_indy=(b-r)/(b+r)
-                haze_hannover=((b+r)/2.-g)/((b+r)/2.+g)
-                intensity=r+b
-                rbr=r/b
-                if len(rbr[np.isfinite(rbr)])!=0:
-                    #-90+6
+def invert_image(image):
+    image_out=image.copy()
+    image_out[:,:,0]=image[:,:,2]
+    image_out[:,:,2]=image[:,:,0]
+    return (image_out)
 
-                   # adjustment=calculate_pza_slope_adjust(pazi2,120+i*10,2*k)
+def filename(data_directory,time_in,suffix):
+    todayspath=datetime.datetime.strftime(time_in,'%Y/%m/%Y%m%d')
+    directory_out=data_directory+todayspath+'/'
+    if not os.path.exists(os.path.dirname(directory_out)):
+        os.makedirs(os.path.dirname(directory_out))
+    n=''
+    filename_out=datetime.datetime.strftime(time_in,'%Y%m%d_%H%M_'+suffix)
 
-                    spa=calculate_spa(pazi,psza,azi,sza)
-                    haze=((b+r)/2.-g)/((b+r)/2.+g)
-                    
-                    spa_limit=15
-                    horizon_limit=70.
-                    intensity_limit=500
-                    window=5
-                    min_spa=np.nanmin(spa)*180/np.pi
-                    spa_max=min_spa+120
-                    flag=0
-                    mask,sat_stat=prepare_mask(image,intensity,horizon_limit,window=window,sun_mask_high=20,sun_mask_low=10,sun_mask_horizon=40,intensity_limit=intensity_limit)
-                    
-                    
-                    cloud_map_elifan=elifan(rbr,mask,bin_values,sat_stat)
-                    
-                    cloud_count_weight=float(sum(psza[cloud_map_elifan==1]))
-                    clear_count_weight=float(sum(psza[cloud_map_elifan==3]))
-                    grey_count_weight=float(sum(psza[cloud_map_elifan==2]))
-                    
-                    cloud_map_ids=['Masked','Cloud','Grey/Thin/Unknown','Clear']
-                    cmap = colors.ListedColormap(['black','white','grey','blue'])
-                    bounds=[0,1,2,3,4]
-                    norm = colors.BoundaryNorm(bounds, cmap.N)
-                    image=cmap(norm(cloud_map_elifan))
-                    
-                    image_name_out=weka_dir(datetime.datetime.strftime(meas_date,'V:/uv/allsky/pi03/%Y/%m/%Y%m%d/%Y%m%d_%H%M_'+image_type+'_elicm_nv.jpg'))
-                    plt.imsave(image_name_out,image)
-                    
-                    filename_out=weka_dir(datetime.datetime.strftime(meas_date,'V:/uv/allsky/pi03/%Y/%m/%Y%m%d/%Y%m%d_'+image_type+'_elifan.dat'))
-                    if not os.path.exists(filename_out):
-                        f=open(filename_out,'w')
-                        f.write("Daily Log\n Date, Time, Image, Clear Pixels, Cloud Pixels, Grey/Unknown Pixels,Saturation Stat\n")
-                        f.close()
-            
-                    x=0
-                    while x<5:
-                        try:
-                            f=open(filename_out,'a')
-                            f.write(str(meas_date)+" "+item+" "+"%7d %7d %7d %.3f\n" % (clear_count_weight,cloud_count_weight,grey_count_weight,sat_stat))
-                            f.close()
-                            x=6
-                        except IOError:
-                            
-                            print("trying again")
-                            x=x+1
-                            continue
-    run_date=run_date+datetime.timedelta(hours=24)
+    return directory_out,filename_out
+
+def filename_day(data_directory,time_in,suffix):
+    todayspath=datetime.datetime.strftime(time_in,'%Y/%m/%Y%m%d')
+    directory_out=data_directory+todayspath+'/'
+    if not os.path.exists(os.path.dirname(directory_out)):
+        os.makedirs(os.path.dirname(directory_out))
+    n=''
+    filename_out=datetime.datetime.strftime(time_in,'%Y%m%d_'+suffix)
+
+    return directory_out,filename_out
+def filename2(data_directory,time_in,suffix):
+    todayspath=datetime.datetime.strftime(time_in,'%Y/%m/%Y%m%d/%Y%m%d_%H%M')
+    directory_out=data_directory+todayspath+'_'+suffix+'/'
+    if not os.path.exists(os.path.dirname(directory_out)):
+        os.makedirs(os.path.dirname(directory_out))
+    return directory_out
+
+def file_checker(filename,extention):
+    n=1
+    if os.path.exists(filename+extention):
+        filename_out=filename+'_'+str(n)+extention
         
-#        sky_indy_temp,band1,mean_band2,std_band2,r_squared,mean_corr,flag=correct_sky_index(sky_indy,haze,mask,horizon_limit,spa_limit,intensity_limit,spa_max)
-#        
-#        
-#        
-#        hsc,hcc,hgc,cloud_map_niwa,sat_stat,b1_threshold_sky_indy1_low,b1_threshold_sky_indy1_high,flag,modal_flag,r_squared=niwa(sky_indy_temp,mask,band1,mean_band2,std_band2,mean_corr,sat_stat)
-#
-#        
-#        
-#        cloud_map_ids=['Masked','Cloud','Grey/Thin','Clear']
-#        cmap = colors.ListedColormap(['black','white','grey','blue'])
-#        bounds=[0,1,2,3,4]
-#        norm = colors.BoundaryNorm(bounds, cmap.N)
-#        image=cmap(norm(cloud_map_niwa))
-#        
-#        plt.imsave(datetime.datetime.strftime(meas_date,'V:/uv/allsky/pi03/%Y/%m/%Y%m%d/%Y%m%d_%H%M_'+image_type+'_cm.jpg'),image)
-#        
-#    run_date=run_date+datetime.timedelta(hours=24)
+        while n<100:
+            if os.path.exists(filename_out):
+                n+=1
+                filename_out=filename+'_'+str(n)+extention
+            else:
+                break
+    else:
+        filename_out=filename+extention
+    return filename_out
+        
+def save_control_values(filename, all_settings):
+    filename=file_checker(filename,'.txt')
+    with open(filename, 'w') as f:
+        for settings in all_settings:
+            for k in sorted(settings.keys()):
+                f.write('%s: %s\n' % (k, str(settings[k])))
+    print('Camera settings saved to %s' % filename)
     
-#    
-#[-0.22456711 -0.31945197  0.14638141  0.50532148]
-#[-0.19683721 -0.32365105  0.06395923  0.44956627]
-#[-0.20968447 -0.28426046  0.10100695  0.45682384]
-      #  cv2.imwrite(item.split('.')[0]+'_2.jpg',image)
+def decdeg2dms(dd):
+    is_positive = dd >= 0
+    dd = abs(dd)
+    minutes,seconds = divmod(dd*3600,60)
+    degrees,minutes = divmod(minutes,60)
+    degrees = degrees if is_positive else -degrees
+    return str(int(degrees))+":"+str(int(minutes))+":"+str(seconds)
+
+def sunzen_ephem(time,Lat,Lon,psurf,temp):
+    time=time
+    observer = ephem.Observer()
+    observer.lon = decdeg2dms(Lon)
+    observer.lat = decdeg2dms(Lat)
+    observer.date = time
+ 
+    observer.pressure=psurf
+    observer.temp=temp
+    sun = ephem.Sun(observer)
+   # sun.compute(observer)
+    alt_atr = float(sun.alt)
+    solar_altitude=180.0*alt_atr/np.pi
+    solar_zenith=90.0-solar_altitude
+    solar_azimuth=180*float(sun.az)/np.pi
+    return solar_zenith, solar_azimuth
+
+def compute_cloud(image,meas_date,configuration):
+
+    pazi=calculate_azi_zwo2(x0=configuration['x_centre'],y0=configuration['y_centre'],heading=configuration['heading_correction'])
+    psza=calculate_pza_zwo(x0=configuration['x_centre'],y0=configuration['y_centre'],proj_grad=configuration['proj_grad'],proj_offset=configuration['proj_offset'])
+    sza,azi=sunzen_ephem(meas_date-datetime.timedelta(hours=configuration['timezone']),configuration['latitude'],configuration['longitude'],configuration['pressure'],configuration['temperature'])
+
+    b,g,r=cv2.split(image)
+    r=np.array(r,dtype=np.float)
+    g=np.array(g,dtype=np.float)
+    b=np.array(b,dtype=np.float)
+    sky_indy=(b-r)/(b+r)
+    intensity=r+b
+    rbr=r/b
+    if len(rbr[np.isfinite(rbr)])!=0:
+        spa=calculate_spa(pazi,psza,azi,sza)
+        haze=((b+r)/2.-g)/((b+r)/2.+g)
+  
+        min_spa=np.nanmin(spa)*180/np.pi
+        configuration['min_spa']=min_spa
+        configuration['sza']=sza
+        flag=0
+        mask,sat_stat=prepare_mask(image,intensity,sky_indy,spa,psza,configuration)
+
+        cloud_map_elifan=elifan(rbr,mask,configuration['bin_values'],sat_stat)
+        cloud_count_weight=float(sum(psza[cloud_map_elifan==1]))
+        clear_count_weight=float(sum(psza[cloud_map_elifan==3]))
+        grey_count_weight=float(sum(psza[cloud_map_elifan==2]))
+        cloud_map_ids=['Masked','Cloud','Grey/Thin/Unknown','Clear']
+        cmap = colors.ListedColormap(['black','white','grey','blue'])
+        bounds=[0,1,2,3,4]
+        norm = colors.BoundaryNorm(bounds, cmap.N)
+        image=cmap(norm(cloud_map_elifan))
+        directory_out,filename_out=filename(configuration['cloud_fraction_directory'],meas_date,configuration['image_type']+'_elicm')
+        file_out=file_checker(directory_out+filename_out,'.jpg')
+        plt.imsave(file_out,image)
+        directory_out,filename_out=filename_day(configuration['cloud_fraction_directory'],meas_date,configuration['image_type']+'_elifan')
+        filename_out=directory_out+filename_out+'.dat'
+        if not os.path.exists(filename_out):
+            f=open(filename_out,'w')
+            f.write("Daily Log\n Date, Time, Image, Clear Pixels, Cloud Pixels, Grey/Unknown Pixels,Saturation Stat\n")
+            f.close()
+
+        f=open(filename_out,'a')
+        f.write(str(meas_date)+" "+file_out+" "+"%7d %7d %7d %.3f\n" % (clear_count_weight,cloud_count_weight,grey_count_weight,sat_stat))
+        f.close()
+
+configuration_dark={'dark_colour_balance' : 1,
+                    'dark_image' : '/home/pi/CamPy4Pi/dark_image.jpg',
+                    'image_type' : 'dark',
+                    'dark_directory' : '/home/pi/dark_sky/'}
             
 
-#    picmd=datetime.datetime.strftime(run_date,"find /mnt/uvuser/groups/atmos/uv/allsky/pi03/%Y/%m/%Y%m%d/ -name \*.jpg")
-#    pi_return=subprocess.check_output(picmd,shell=True)
-#    image_list=[]
-#    if ".jpg" in pi_return:
-#        print "Images Acquired"
-#        pi02_return=pi_return.split("\n")
-#        for line in pi02_return:
-#            if ".jpg" in line:
-#                image_list.append(line)
-#                
-#    image_groups={}
-#    for image_in in image_list:
-#        name=image_in.split('/')[-1][:-6]
-#        if name not in image_groups:
-#            image_groups[name]=[image_in]
-#        else:
-#            image_groups[name].append(image_in)
-#            
-#    image_groups.pop('', None)     
-#    directory_in="/mnt/uvuser/groups/atmos/uv/allsky/pi"+pi_number+"/"
-#    for key in sorted(image_groups.keys()):
-#        if len(image_groups[key])==4:
-#            print "Night, all images acquired"
-#            for image in image_groups[key]:
-#                try:
-#                    img=read_image_raw(image)
-#                    img=simplest_cb(img,1)
-#                    cv2.imwrite(image[:-4]+"_processed.jpeg",img)
-#                    os.remove(image)
-#                except:
-#                    print 'bad image'
-#                    continue
-#    
-#        if len(image_groups[key])==8:
-#            print key
-#            print "Day, all images acquired"
-#                
-#    
-#            try:
-#                image_list=[read_image_raw(fn) for fn in image_groups[key]]   
-#                image_list_cleaned=[]
-#                if len(where(image_list[0][:,:,0]>250))>1000:
-#                    print 'saturated pixels'
-#                exp_list=[32e-6,64e-6,250e-6,500e-6,1000e-6,2000e-6,5000e-6,10000e-6]
-#                exp_cleaned=[]
-#                for i,image_in in enumerate(image_list):
-#                   # print float(len(where(image_list[i][:,:,0]>250)[0]))
-#                   # print float(len(where(image_list[i][:,:,0]>-1.)[0]))
-#        #                if np.average(image_in[:,:,2])>np.average(image_in[:,:,0]):
-#        #                    print 'bad image, excluding'
-#        
-#    #                if i>=4:#float(len(np.where(image_list[i][:,:,0]>250)[0]))/float(len(np.where(image_list[i][:,:,0]>-1)[0]))>0.25:
-#    #                    print 'too saturated, excluding'
-#    #                else:
-#                    if i<5:
-#                        exp_cleaned.append(exp_list[i])
-#                        image_list_cleaned.append(image_in)
-#                exp_cleaned=np.array(exp_cleaned,dtype=np.float32)
-#                alignmtb=cv2.createAlignMTB()
-#                alignmtb.process(image_list_cleaned,image_list_cleaned)
-#                mm=cv2.createMergeMertens()
-#                result_mertens=mm.process(image_list_cleaned)
-#                res_mertens_8bit = clip(result_mertens*255, 0, 255).astype('uint8')
-#                img_out=res_mertens_8bit
-#                img_out=simplest_cb(img_out,10)
-#                img_out=adjust_gamma(img_out,gamma=2.)
-#                cv2.imwrite(fn[:-6]+"_merged_all.jpg",img_out) 
-#                for fn in image_groups[key]:
-#                    os.remove(fn)
-#            except:
-#                print "bad merge, pass"
-#                continue
-#            #fn=image_groups[key][0]
-##                      fn=image_in
-#            date_string=fn.split('/')[-1]
-#            date_string=date_string.rstrip('_merged_all.jpg')
-#           # date_string+="00"
-#          #  date_string='201806241030'
-#            print date_string
-#            meas_date=datetime.datetime.strptime(date_string,'%Y%m%d%H%M%S')
-#            meas_date=meas_date.replace(second=0)
-##        print meas_date
-##        sza,azi=sunzen_ephem(meas_date-datetime.timedelta(hours=12),-45.038,169.684,1000,10)
-##        image_in=directory_in+fn[:-6]+"_merged_all.jpg"
-#            print meas_date
-#            sza,azi=sunzen_ephem(meas_date-datetime.timedelta(hours=12),-45.038,169.684,1000,10)
-#            #directory_in='V:/uv/allsky/pi03/2018/06/20180624/'
-#            image_in=fn[:-6]+"_merged_all.jpg"
-#            print image_in
-#            #image_in=directory_in+date_string+"_merged_all.jpeg"
-#            
-#    
-#            img=cv2.imread(image_in)
-#            #    bob=simplest_cb(img,1)
-#            b,g,r=cv2.split(img)
-#            
-#            r=np.array(r,dtype=np.float)
-#            g=np.array(g,dtype=np.float)
-#            b=np.array(b,dtype=np.float)
-#            #-90+6
-#            x_centre=1470
-#            y_centre=1165
-#           # adjustment=calculate_pza_slope_adjust(pazi2,120+i*10,2*k)
-#            pazi=calculate_azi_zwo2(r,x0=x_centre,y0=y_centre,heading=180-21)
-#            psza=calculate_pza_zwo(r,x0=x_centre,y0=y_centre,proj_grad=0.057,proj_offset=0)
-#            
-#            spa=calculate_spa(pazi,psza,azi,sza)
-#
-#            #
-#            sky_indy=(b-r)/(b+r)
-#            nanmask=np.ones(np.array(r).shape)
-#            nanmask[np.isnan(sky_indy)]=0
-#            haze_hannover=((b+r)/2.-g)/((b+r)/2.+g)
-#            intensity=r+b
-#            intensity_limit=500
-#            spa_limit=20
-#            horizon_limit=75.
-#            window=5
-#            min_spa=np.nanmin(spa)*180/pi
-#
-#            if min_spa>window:
-#                window+=min_spa
-#            if sza>horizon_limit:
-#                window+=sza-horizon_limit
-#            sat_count=len([(np.where((intensity>intensity_limit) &  (spa<np.deg2rad(window))))][0][0])
-#    #        sat_count=len([(where((intensity>intensity_limit)))][0][0])
-#    #        total_count=intensity.size
-#            total_count=len([(where((spa<np.deg2rad(window))))][0][0])
-#            
-#            solar_mask=get_sun_mask(spa,2)
-#    
-#         #   imshow((r+g+b)*solar_mask)
-#        
-#            flag=0.0
-#            if total_count==0:
-#                sat_stat=-1.0
-#                flag+=0.3
-#            else:
-#                sat_stat=float(sat_count)/float(total_count)
-#                
-#                
-#            if sat_stat>0.1:
-#                sat_stat=1.
-#                flag=1.0
-#                
-#            if sat_stat>0.5:
-#                print sat_stat
-#                solar_mask=get_sun_mask(spa,20)
-#            elif 0<sat_stat<0.1:
-#                print sat_stat
-#                solar_mask=get_sun_mask(spa,10)
-#            else:
-#                solar_mask=np.ones(np.array(r).shape)
-#                
-#                    
-#            if sza>horizon_limit and sat_stat>0.0:
-#                sat_stat=1.0
-#                spa_limit=20
-#                solar_mask=get_sun_mask(spa,40)
-#            horizon_mask=np.ones(np.array(r).shape)
-#            horizon_mask[np.array(psza)>np.deg2rad(horizon_limit)]=0
-#            haze_mask=np.ones(horizon_mask.shape)
-#            mask=np.ones(r.shape)
-#            mask[np.any((horizon_mask==0,solar_mask==0,haze_mask==0,nanmask==0),axis=0)]=0
-#            
-#            cloud_map_ids=['Masked','Cloud','Grey/Thin','Clear']
-#            cmap = colors.ListedColormap(['black','white','grey','blue'])
-#            bounds=[0,1,2,3,4]
-#            norm = colors.BoundaryNorm(bounds, cmap.N)
-#            print r.max(),g.max(),b.max(),sky_indy.max()
-#            try:
-#                hsc,hcc,hgc,cloud_map_niwa,sat_stat,b1_threshold_sky_indy1_low,b1_threshold_sky_indy1_high,flag,modal_flag,r_squared=niwa(sky_indy,haze_hannover,intensity,psza,pazi,spa,mask,spa_limit,min_spa+120.,intensity_limit,horizon_limit,sat_stat,flag,sza)
-#            
-#            
-#            except:
-#                print 'failed, bad image?'
-#                continue
-#                
-#           # imshow(cloud_map_niwa)
-#           
-#            year=str(meas_date.year)
-#            month="%02d" % meas_date.month
-#            day="%02d" % meas_date.day
-#            suffix=0
-#            todayspath=year+month+day
-#            
-#            cmap=cmap
-#            norm=norm
-#            image=cmap(norm(cloud_map_niwa))
-#            directory='/mnt/uvuser/groups/atmos/uv/allsky/pi03/'+year+'/'+month+'/'+todayspath+'/'
-#            date_string=datetime.datetime.strftime(meas_date,'%Y%m%d%H%M')
-#            print directory+date_string+"_cmap_niwa_2.jpeg"
-#            plt.imsave(directory+date_string+"_cmap_niwa.jpeg",image)
-#    
-#
-#            filepath_out=todayspath
-#            
-#            
-#            #dir_out="/mnt/geddesag/scratch/geddesag/AllskyPi/all/"+folder_in+"/"
-#            filename_out=directory+datetime.datetime.strftime(meas_date,'%Y%m%d')+"_merged.log"
-#        
-#            print filename_out
-#            if not os.path.exists(filename_out):
-#                f=open(filename_out,'w')
-#                f.write("Daily Log\n Date, Time, Image, Clear Pixels, Cloud Pixels, Grey Pixels, Sun Saturation, Threshold 1, Threshold 2, Flag, Modal Flag, R-Squared, mean blue, mean green, mean r\nFlag IDs +1 cloud detected, +0.1 solar correction, +0.3 sun out of image, cannot correct\n Modal Flags 0 fwd3, 1 rvs3, 2 fwd2, 3 rvs2")
-#                f.close()
-#    
-#            x=0
-#            while x<5:
-#                try:
-#                    f=open(filename_out,'a')
-#                    f.write(str(meas_date)+" "+image_in+" "+"%7d %7d %7d %.3f %.3f %.3f %.2f %d %.3f %.2f %.2f %.2f\n" % (hsc,hcc,hgc,sat_stat,b1_threshold_sky_indy1_low,b1_threshold_sky_indy1_high,flag,modal_flag,r_squared,b[0][0],g[0][0],r[0][0]))
-#                    f.close()
-#                    x=6
-#                except IOError:
-#                    
-#                    print "trying again"
-#                    x=x+1
-#                    continue
-#                
-#    run_date=run_date+datetime.timedelta(hours=24)
+configuration_auto={'cloud_fraction_directory' : '/home/pi/cloud_fraction/',
+            'x_centre' : 1470,
+            'y_centre' : 1165,
+            'heading_correction' : 180-21,
+            'proj_grad' : 0.057,
+            'proj_offset' : 0,
+            'sun_mask_high' : 20,
+            'sun_mask_low': 10,
+            'sun_mask_horizon' : 40,
+            'horizon_limit' : 70.,
+            'intensity_limit' : 500,
+            'window' : 5 ,
+            'latitude' : -45.0536,
+            'longitude' : 169.6735,
+            'pressure' : 1000,
+            'temperature' : 10,
+            'timezone' : 12,
+            'sza_processing_limit' : 90,
+            'image_type' : 'auto',
+            'bin_values' : [-np.inf,0.35,0.4,0.6,0.7,0.8,np.inf]}
+    
+
+configuration_hdr={'cloud_fraction_directory' : '/home/pi/cloud_fraction/',
+            'x_centre' : 1470,
+            'y_centre' : 1165,
+            'heading_correction' : 180-21,
+            'proj_grad' : 0.057,
+            'proj_offset' : 0,
+            'sun_mask_high' : 20,
+            'sun_mask_low': 10,
+            'sun_mask_horizon' : 40,
+            'horizon_limit' : 70.,
+            'intensity_limit' : 500,
+            'window' : 5 ,
+            'latitude' : -45.0536,
+            'longitude' : 169.6735,
+            'pressure' : 1000,
+            'temperature' : 10,
+            'timezone' : 12,
+            'sza_processing_limit' : 90,
+            'image_type' : 'hdr',
+            'bin_values' : [-np.inf, 0.4, 0.45, 0.6, 0.65, 0.7,np.inf]}
+
