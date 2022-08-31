@@ -209,9 +209,9 @@ class zwo_controller(object):
             hd=mpro.Process(target=self.process_hdr,args=(image_list,time_in))
             hd.start()
             
-        else:
-            for image in image_list:
-                process_dark(image,time_in,configuration_dark)
+        #else:
+        #    for image in image_list:
+        #        process_dark(image,time_in,configuration_dark)
         del image_list
 
 
@@ -269,7 +269,7 @@ if __name__=='__main__':
     front_time=1
     met_time=1
     sza_threshold=100
-    night_exposures=[10000000,60000000,90000000,120000000]
+    night_exposures=[45000000]
     day_exposures=[16,32,64,250,500,1000,1250,1500]
     
     
@@ -325,8 +325,11 @@ if __name__=='__main__':
                 try:
                     if sza<sza_threshold:
                         allsky_camera.multi_expo(exposure_list=day_exposures,suffix='Day')
-                    else: 
-                        allsky_camera.multi_expo(exposure_list=night_exposures,suffix='Night',gain=255)
+                    else:
+                        allsky_camera.set_type(color=False)
+                        allsky_camera.multi_expo(exposure_list=night_exposures,suffix='Night',gain=1)
+                        allsky_camera.set_type(color='True')
+
                 except:
                     continue
 

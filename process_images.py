@@ -320,9 +320,9 @@ def get_sun_mask(spa,angle):
 def process_dark(image,meas_date,configuration):
     directory_out,filename_out=filename(configuration['dark_directory'],meas_date,'corrected')
     file_out=file_checker(directory_out+filename_out,'.jpg')
-    if configuration['dark_image']!=None:
-        dark_image=cv2.imread(configuration['dark_image'])
-        image=image-dark_image
+    #if configuration['dark_image']!=None:
+     #   dark_image=cv2.imread(configuration['dark_image'])
+     #   image=image-dark_image
     #image=simplest_cb(image,configuration['dark_colour_balance'])
     cv2.imwrite(file_out,image)
 
@@ -499,5 +499,5 @@ configuration_hdr={'cloud_fraction_directory' : '/home/pi/cloud_fraction/',
             'timezone' : 12,
             'sza_processing_limit' : 90,
             'image_type' : 'hdr',
-            'bin_values' : [-np.inf, 0.4, 0.45, 0.6, 0.65, 0.7,np.inf]}
+            'bin_values' : [-np.inf, 0.3, 0.4, 0.45, 0.65, 0.7,np.inf]}
 
