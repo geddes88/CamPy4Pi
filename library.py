@@ -14,7 +14,10 @@ import numpy as np
 import ephem
 import  math
 
-
+def get_as_base64_file(file):
+    with open(file,'rb') as f:
+        image=f.read()
+    return base64.b64encode(image)
 
 
 def decdeg2dms(dd):
@@ -44,6 +47,37 @@ def sunzen_ephem(time,Lat,Lon,psurf,temp,alt):
     solar_zenith=90.0-solar_altitude
     solar_azimuth=180*float(sun.az)/np.pi
     return solar_zenith, solar_azimuth
+
+def datestr_to_time_temp(a,b):
+    b=b.split('.')[0]
+    datetime_out=datetime.datetime.strptime(a+b,"%Y-%m-%d%H:%M:%S")
+    return datetime_out
+
+def read_todays_data(time_in):
+    file=datetime.datetime.strftime(time_in,'/home/pi/cloud_fraction/%Y/%m/%Y%m%d/%Y%m%d_hdr_elifan.dat')
+    data=np.loadtxt(file,skiprows=2,unpack=True,dtype=str)
+    df=pd.DataFrame()
+    times=list(map(datestr_to_time_temp,data[0],data[1]))
+    df['times']=times
+    df['image']=data[2]
+    clear_pixels=np.array(data[3],dtype=float)
+    cloud_pixels=np.array(data[4],dtype=float)
+    grey_pixels=np.array(data[5],dtype=float)
+    image_names=[datetime.datetime.strftime(x,'/home/pi/allsky_camera/%Y/%m/%Y%m%d/%Y%m%d_%H%M_hdr.jpg') for x in times]
+    cloud_image_names=[datetime.datetime.strftime(x,'/home/pi/cloud_fraction/%Y/%m/%Y%m%d/%Y%m%d_%H%M_hdr_elicm.jpg') for x in times]
+
+    total_pixels=clear_pixels+cloud_pixels+grey_pixels
+    cloud_fraction=(cloud_pixels)/total_pixels
+    df['cloud_fraction']=cloud_fraction
+    df['grey_fraction']=grey_pixels/total_pixels
+    df['sun_flag']=np.array(data[6],dtype=float)
+    df['image_names']=image_names
+    df['cloud_names']=cloud_image_names
+    return df
+
+
+
+    
     
 def sunrise_sunset(date,Lat,Lon,psurf,temp,alt):
     observer = ephem.Observer()

@@ -48,7 +48,7 @@ app.layout = html.Div([
                         style={'color': '#0078bc', 'justify': 'center', 'font-family': 'sans-serif'}),
                 html.H6('HH:MM', id='obs_time',
                         style={'color': "#0f2e6a", 'justify': 'center', 'font-family': 'sans-serif'}),
-                html.H6('Cloud Fraction', id='cloud_frac_label',
+                html.H6('White Cloud Fraction', id='cloud_frac_label',
                         style={'color': '#0078bc', 'justify': 'center', 'font-family': 'sans-serif'}),
                 html.H6('XX.XX', id='cloud_fraction',
                         style={'color': "#0f2e6a", 'justify': 'center', 'font-family': 'sans-serif'}),
@@ -63,9 +63,9 @@ app.layout = html.Div([
                         style={'color': '#0078bc', 'justify': 'center', 'font-family': 'sans-serif'}),
                 html.H6('XXX.XX', id='saz_value',
                         style={'color': "#0f2e6a", 'justify': 'center', 'font-family': 'sans-serif'}),
-                html.H6('Camera Temp.', id='cam_temp_label',
+                html.H6('Grey/Uncertain Fraction', id='cam_temp_label',
                         style={'color': '#0078bc', 'justify': 'center', 'font-family': 'sans-serif'}),
-                html.H6('XX.XX', id='cam_temp',
+                html.H6('XX.XX', id='grey_fraction',
                         style={'color': "#0f2e6a", 'justify': 'center', 'font-family': 'sans-serif'}),
             ], className='four columns', style={'textAlign': 'center'}),
 
@@ -78,9 +78,9 @@ app.layout = html.Div([
                         style={'color': '#0078bc', 'justify': 'center', 'font-family': 'sans-serif'}),
                 html.H6('HH:MM (+MM:SS)', id='sunset_time',
                         style={'color': "#0f2e6a", 'justify': 'center', 'font-family': 'sans-serif'}),
-                html.H6('Sun Out Flag', id='sun_flag_label',
+                html.H6('Sun Saturation', id='sun_flag_label',
                         style={'color': '#0078bc', 'justify': 'center', 'font-family': 'sans-serif'}),
-                html.H6('T/F', id='sun_out_flag',
+                html.H6('T/F', id='sun_sat',
                         style={'color': "#0f2e6a", 'justify': 'center', 'font-family': 'sans-serif'}),
             ], className='four columns', style={'textAlign': 'center'}),
 
@@ -94,13 +94,21 @@ app.layout = html.Div([
 
     ],className='one-half column'),
     html.Div([
-        html.Img(src=app.get_asset_url("Sun.png"),id='allsky_image',style={'height' : '45%','width' : '90%'}),
-        html.Img(src=app.get_asset_url("Cloudy.png"),id='cloud_fraction_image',style={'height' : '45%','width' : '90%'}),
+        html.Img(src=app.get_asset_url("Sun.png"),id='allsky_image',style={'height' : 'auto','width' : '70%'}),
+        html.Img(src=app.get_asset_url("Cloudy.png"),id='cloud_image',style={'height' : 'auto','width' : '70%'}),
     ],className='one-half column'),
 ])
 
 """Live Feed Callbacks"""
 
+def restart():
+    import sys
+    print("argv was",sys.argv)
+    print("sys.executable was", sys.executable)
+    print("restart now")
+
+    import os
+    os.execv(sys.executable, ['python'] + sys.argv)
 
 @app.callback([Output('local_time', 'children'), Output('sza_value', 'children'), Output('saz_value', 'children'),
                Output('sunrise_time', 'children'), Output('sunset_time', 'children')],
@@ -147,32 +155,41 @@ def update_time(n):
 
     return datetime.datetime.strftime(time_now, '%H:%M'), '%.2f' % sza, '%.2f' % saz, sunrise_string, sunset_string
 
-@app.callback([Output('obs_time','children'),Output('cloud_fraction','children'),Output('cam_temp','children'),Output('sun_out_flag','children'),Output('cloud_graph','figure')], [Input('live_clock', 'n_intervals')])
+@app.callback([Output('obs_time','children'),Output('cloud_fraction','children'),Output('grey_fraction','children'),Output('sun_sat','children'),Output('cloud_graph','figure'),Output('allsky_image','src'),Output('cloud_image','src')], [Input('live_clock', 'n_intervals')])
 def update_allsky_data(n):
     """Update all the values, randoms for now"""
-    temperature=random.uniform(-20,100)
-    sun_out_flag=bool(random.getrandbits(1))
-    cloud_fraction=random.uniform(0,1)
+
     recent_time=datetime.datetime.utcnow()+datetime.timedelta(hours=12)
-    times,clouds=get_last_24_hours()
-    times.append(recent_time)
-    clouds.append(cloud_fraction)
-    # data=pd.DataFrame()
-    # data['times']=times
-    # data['cloud']=clouds
+    data=read_todays_data(recent_time)
+    if recent_time-data['times'][data.index.stop-1]<datetime.timedelta(minutes=10):
+        cloud_fraction=data['cloud_fraction'][data.index.stop-1]
+        sun_out_flag=data['sun_flag'][data.index.stop-1]
+        grey_fraction=data['grey_fraction'][data.index.stop-1]
+        allsky_image=get_as_base64_file(data['image_names'][data.index.stop-1])
+        cloud_image=get_as_base64_file(data['cloud_names'][data.index.stop-1])
+        allsky_src='data:image/png;base64,{}'.format(allsky_image.decode())
+        cloud_src='data:image/png;base64,{}'.format(cloud_image.decode())
+
+    else:
+        cloud_fraction=np.nan
+        sun_out_flag=np.nan
+        grey_fraction=np.nan
+        allsky_src=None
+        cloud_src=None
+        
+    
+
     layouts={}
     layouts['autosize'] = True
     layouts['yaxis']={'title' : 'Cloud Fraction'}
     data_out_plot=[]
-    data_out_plot.append({'x' :times,'y': clouds,'name' : 'Cloud Fraction', 'type' : 'lines'})
-    return datetime.datetime.strftime(recent_time,'%H:%M'),cloud_fraction,temperature,str(sun_out_flag),{'data': data_out_plot, 'layout': layouts}
+    data_out_plot.append({'x' :data['times'],'y': data['cloud_fraction'],'name' : 'White Cloud Fraction', 'type' : 'lines'})
+    data_out_plot.append({'x' :data['times'],'y': data['grey_fraction'],'name' : 'Grey/Uncertain Fraction', 'type' : 'lines'})
+    data_out_plot.append({'x' :data['times'],'y': data['grey_fraction']+data['cloud_fraction'],'name' : 'Total Cloud Fraction', 'type' : 'lines'})
 
-def get_last_24_hours():
-    start_time=(datetime.datetime.utcnow()-datetime.timedelta(hours=12)).replace(second=0,microsecond=0)
-    end_time=(datetime.datetime.utcnow()+datetime.timedelta(hours=12,minutes=1)).replace(second=0,microsecond=0)
-    times=[start_time+datetime.timedelta(minutes=10*x) for x in range(24*6)]
-    clouds=[random.uniform(0,1) for x in times]
 
-    return times,clouds
+    return datetime.datetime.strftime(data['times'][data.index.stop-1],'%H:%M'),'%.2f' % cloud_fraction,'%.2f' % grey_fraction,'%.2f' % sun_out_flag,{'data': data_out_plot, 'layout': layouts},allsky_src,cloud_src
+
+
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(host='0.0.0.0',port=8050,debug=True)
